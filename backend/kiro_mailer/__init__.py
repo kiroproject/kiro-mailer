@@ -569,7 +569,7 @@ def _poll_router(ctx: PluginContext) -> Router:
 
 class KiroMailerPlugin(Plugin):
     name = PLUGIN_ID
-    version = "0.1.0"
+    version = "0.1.1"
     plugin_api_min_version = 1
     plugin_api_max_version = 1
 

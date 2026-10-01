@@ -90,6 +90,7 @@ const debounce = (fn, ms) => {
 const STYLE = `
 .km{display:flex;flex-direction:column;gap:14px;color:var(--text);font-size:14px;min-width:0}
 .km *{box-sizing:border-box}
+.km [data-body],.km [data-main],.km [data-page],.km [data-stats]{display:flex;flex-direction:column;gap:14px;min-width:0}
 .km h2,.km h3,.km h4{margin:0}
 .km-card{border:1px solid var(--border);border-radius:var(--radius-card,var(--radius,12px));padding:14px;background:var(--panel,var(--bg,transparent));min-width:0}
 .km-card>h3{font-size:15px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
