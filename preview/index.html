@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mailer Preview</title>
+<style>
+  :root{--bg:#161a22;--text:#eef1f6;--muted:#8b93a3;--accent:#7c5cff;--border:#2b3140;--radius:12px;--panel:#1c212b;--panel-2:#232a36}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:1300px;margin:0 auto;padding:16px}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script type="module">
+  // In-memory imitation of the admin API, enough to exercise the whole UI.
+  const meta = await (await fetch("./meta.json")).json();
+  const clone = (v) => JSON.parse(JSON.stringify(v));
+  const emptyAud = () => ({ groups: [], tariffs: [], filter: {}, core_groups: [], lists: [], manual: "", exclude: { manual: "", lists: [], mailings: [] } });
+  const emptyContent = () => ({ text: "", media: [], buttons: [], poll: null, disable_preview: true, silent: false, protect: false });
+  const store = new Map();
+  let nextId = 4;
+  const add = (id, name, status, content, audience, extra = {}) => store.set(id, { id, name, status, content, audience, scheduled_at: null, started_at: null, finished_at: null, recipient_total: 0, last_error: null, created_at: new Date().toISOString(), ...extra });
+  add(1, "Акция: скидка 20% на продление", "done", { ...emptyContent(), text: "<b>Скидка 20%</b> на продление до конца недели!\nНе упустите.", buttons: [{ kind: "webapp_section", label: "", url: "", section: "plans" }],
+    poll: { question: "Что улучшить в сервисе?", options: ["Скорость", "Цена", "Поддержка", "Приложение"], quiz: false, multiple: false, correct: 0, explanation: "", close_hours: 0 } },
+    { ...emptyAud(), groups: ["active"] }, { started_at: new Date(Date.now() - 36e5).toISOString(), finished_at: new Date(Date.now() - 33e5).toISOString(), recipient_total: 1240 });
+  add(2, "Акция выходного дня", "scheduled", { ...emptyContent(), text: "Выходные со скидкой 🎉" }, { ...emptyAud(), groups: ["expired30"], tariffs: ["start"] }, { scheduled_at: new Date(Date.now() + 864e5).toISOString() });
+  add(3, "Черновик: новости сервиса", "draft", emptyContent(), emptyAud());
+  const json = (body, status = 200) => new Response(JSON.stringify({ ok: status < 400, ...body }), { status, headers: { "Content-Type": "application/json" } });
+  const local = (iso) => iso ? new Date(new Date(iso).getTime() + 3 * 3600e3).toISOString().slice(0, 16) : null;
+  const count = (a) => {
+    const picked = a.groups.length + a.tariffs.length + a.core_groups.length + a.lists.length + (a.manual.trim() ? 1 : 0) + (Object.keys(a.filter).length ? 1 : 0);
+    const selected = picked ? 400 * picked + (a.manual.trim() ? a.manual.split(/\s+/).length : 0) : 0;
+    const excluded = a.exclude.manual.trim() ? 3 : 0;
+    const ineligible = { banned: Math.round(selected * 0.01), no_telegram: Math.round(selected * 0.03), blocked: Math.round(selected * 0.05), missing: 0 };
+    return { selected, excluded, ineligible, final: Math.max(0, selected - excluded - ineligible.banned - ineligible.no_telegram - ineligible.blocked), components: {}, unresolved: a.manual.includes("nobody") ? ["@nobody"] : [], unresolved_excluded: [],
+      sample: selected ? [{ user_id: 1, username: "ivan", first_name: "Иван" }, { user_id: 2, username: null, first_name: "Мария" }, { user_id: 3, username: "alex", first_name: "Алекс" }] : [] };
+  };
+  const issuesOf = (m) => {
+    const out = [];
+    if (!m.content.text && !m.content.media.length && !m.content.poll) out.push("Добавьте текст, медиа или опрос");
+    const a = m.audience;
+    if (!(a.groups.length || a.tariffs.length || a.core_groups.length || a.lists.length || a.manual.trim() || Object.keys(a.filter).length)) out.push("Выберите получателей");
+    return out;
+  };
+  const realFetch = window.fetch.bind(window);
+  window.__calls = [];
+  window.fetch = async (url, opts = {}) => {
+    const u = String(url);
+    if (!u.startsWith("/api/admin/kiro-mailer")) return realFetch(url, opts);
+    const path = u.replace("/api/admin/kiro-mailer", "").split("?")[0];
+    const query = new URLSearchParams(u.split("?")[1] || "");
+    const method = (opts.method || "GET").toUpperCase();
+    const isRaw = opts.body instanceof Uint8Array;
+    const body = opts.body && !isRaw ? JSON.parse(opts.body) : {};
+    window.__calls.push(method + " " + path);
+    await new Promise((r) => setTimeout(r, 50));
+    let m;
+    if (path === "/meta") return json(meta);
+    if (path === "/settings") return json({ settings: meta.settings });
+    if (path === "/mailings" && method === "GET") {
+      return json({ mailings: [...store.values()].reverse().map((x) => ({ id: x.id, name: x.name, status: x.status, scheduled_at: x.scheduled_at, scheduled_local: local(x.scheduled_at), started_at: x.started_at, finished_at: x.finished_at, created_at: x.created_at,
+        recipient_total: x.recipient_total, preview: x.content.text, media: x.content.media.length, has_poll: !!x.content.poll,
+        stats: x.id === 1 ? { pending: 0, sent: 1180, failed: 24, blocked: 31, skipped: 5, total: 1240, voted: 402 } : {} })) });
+    }
+    if (path === "/mailings" && method === "POST") {
+      const id = nextId++;
+      const src = body.copy_of ? store.get(body.copy_of) : null;
+      add(id, src ? src.name + " (копия)" : "Новая рассылка", "draft", src ? clone(src.content) : emptyContent(), src ? clone(src.audience) : emptyAud());
+      return json({ id });
+    }
+    if ((m = path.match(/^\/mailings\/(\d+)$/))) {
+      const x = store.get(Number(m[1]));
+      if (method === "GET") return json({ mailing: { ...clone(x), scheduled_local: local(x.scheduled_at), tz_offset_hours: 3, issues: issuesOf(x) } });
+      if (method === "PUT") { Object.assign(x, { name: body.name, content: body.content, audience: body.audience }); return json({ issues: issuesOf(x) }); }
+      if (method === "DELETE") { store.delete(x.id); return json({}); }
+    }
+    if ((m = path.match(/^\/mailings\/(\d+)\/([\w-]+)$/))) {
+      const x = store.get(Number(m[1]));
+      const action = m[2];
+      if (action === "audience") return json({ preview: count(body.audience || x.audience) });
+      if (action === "send") { x.status = "sending"; x.started_at = new Date().toISOString(); x.recipient_total = count(x.audience).final; return json({ recipients: x.recipient_total }); }
+      if (action === "schedule") { x.status = "scheduled"; x.scheduled_at = new Date(Date.now() + 36e5).toISOString(); return json({}); }
+      if (["unschedule", "pause", "resume", "cancel", "retry-failed"].includes(action)) { x.status = { unschedule: "draft", pause: "paused", resume: "sending", cancel: "cancelled", "retry-failed": "sending" }[action]; return json({ count: 24 }); }
+      if (action === "test") return json({});
+      if (action === "stats") {
+        const poll = x.content.poll;
+        return json({ stats: { status: x.status, counts: { pending: 0, sent: 1180, failed: 24, blocked: 31, skipped: 5, total: 1240 }, errors: [{ error: "Forbidden: bot was blocked by the user", status: "blocked", count: 31 }, { error: "network: timeout", status: "failed", count: 24 }],
+          started_at: x.started_at, finished_at: x.finished_at, scheduled_at: x.scheduled_at, speed_per_sec: 19.4, eta_seconds: null, delivered_pct: 95.2,
+          poll: poll ? { question: poll.question, quiz: false, options: poll.options.map((t, i) => ({ index: i, text: t, votes: [180, 96, 71, 55][i] || 0, pct: [44.8, 23.9, 17.7, 13.7][i] || 0, correct: false })), voters: 402, polls_sent: 1180, response_pct: 34.1 } : undefined } });
+      }
+      if (action === "recipients") return json({ total: 1240, rows: Array.from({ length: 8 }, (_, i) => ({ user_id: 4000 + i, username: i % 3 ? "user" + i : null, status: ["sent", "sent", "blocked", "sent", "failed"][i % 5], error: i % 5 === 2 ? "bot was blocked" : null, sent_at: new Date().toISOString(), option_ids: i % 2 ? [i % 4] : null })) });
+      if (action === "export") return json({ rows: [] });
+    }
+    if (path === "/manual") return json({ found: body.text.trim() ? body.text.trim().split(/[\s,]+/).length : 0, unresolved: body.text.includes("nobody") ? ["@nobody"] : [], total: 3 });
+    if (path === "/lists" && method === "POST") return json({ id: 9, count: 5 });
+    if (path === "/media") return json({ id: "m" + Date.now().toString(16), chunk: 4194304 });
+    if (/^\/media\/\w+\/(chunk|finish)$/.test(path)) return json({ received: 0 });
+    return json({ error: "not_found" }, 404);
+  };
+  const mod = await import("../frontend/admin/index.js?" + Date.now());
+  window.__inst = mod.mountView("main", document.getElementById("app"), {});
+</script>
+</body>
+</html>
